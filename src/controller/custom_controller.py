@@ -59,13 +59,22 @@ class CustomController(Controller):
         )
         async def ask_for_assistant(query: str, browser: BrowserContext):
             if self.ask_assistant_callback:
-                if inspect.iscoroutinefunction(self.ask_assistant_callback):
-                    user_response = await self.ask_assistant_callback(query, browser)
-                else:
-                    user_response = self.ask_assistant_callback(query, browser)
-                msg = f"AI ask: {query}. User response: {user_response['response']}"
-                logger.info(msg)
-                return ActionResult(extracted_content=msg, include_in_memory=True)
+                try:
+                    if inspect.iscoroutinefunction(self.ask_assistant_callback):
+                        user_response = await self.ask_assistant_callback(query, browser)
+                    else:
+                        user_response = self.ask_assistant_callback(query, browser)
+                    
+                    response_text = "No response provided"
+                    if isinstance(user_response, dict) and 'response' in user_response:
+                        response_text = user_response['response']
+                    
+                    msg = f"AI ask: {query}. User response: {response_text}"
+                    logger.info(msg)
+                    return ActionResult(extracted_content=msg, include_in_memory=True)
+                except Exception as e:
+                    logger.error(f"Error in ask_for_assistant: {str(e)}")
+                    return ActionResult(extracted_content="Error getting assistance", include_in_memory=True)
             else:
                 return ActionResult(extracted_content="Human cannot help you. Please try another way.",
                                     include_in_memory=True)
@@ -126,7 +135,11 @@ class CustomController(Controller):
                     if action_name.startswith("mcp"):
                         # this is a mcp tool
                         logger.debug(f"Invoke MCP tool: {action_name}")
-                        mcp_tool = self.registry.registry.actions.get(action_name).function
+                        action_obj = self.registry.registry.actions.get(action_name)
+                        if action_obj is None or not hasattr(action_obj, 'function'):
+                            return ActionResult(error=f"MCP tool {action_name} not found or invalid")
+                        
+                        mcp_tool = action_obj.function
                         result = await mcp_tool.ainvoke(params)
                     else:
                         result = await self.registry.execute_action(
@@ -149,7 +162,8 @@ class CustomController(Controller):
                         raise ValueError(f'Invalid action result type: {type(result)} of {result}')
             return ActionResult()
         except Exception as e:
-            raise e
+            logger.error(f"Error in act method: {str(e)}")
+            return ActionResult(error=f"Action error: {str(e)}")
 
     async def setup_mcp_client(self, mcp_server_config: Optional[Dict[str, Any]] = None):
         self.mcp_server_config = mcp_server_config
@@ -165,13 +179,17 @@ class CustomController(Controller):
             for server_name in self.mcp_client.server_name_to_tools:
                 for tool in self.mcp_client.server_name_to_tools[server_name]:
                     tool_name = f"mcp.{server_name}.{tool.name}"
-                    self.registry.registry.actions[tool_name] = RegisteredAction(
-                        name=tool_name,
-                        description=tool.description,
-                        function=tool,
-                        param_model=create_tool_param_model(tool),
-                    )
-                    logger.info(f"Add mcp tool: {tool_name}")
+                    try:
+                        param_model = create_tool_param_model(tool)
+                        self.registry.registry.actions[tool_name] = RegisteredAction(
+                            name=tool_name,
+                            description=tool.description,
+                            function=tool,
+                            param_model=param_model,  # type: ignore
+                        )
+                        logger.info(f"Add mcp tool: {tool_name}")
+                    except Exception as e:
+                        logger.error(f"Error registering MCP tool {tool_name}: {str(e)}")
 
     async def close_mcp_client(self):
         if self.mcp_client:

@@ -1,5 +1,6 @@
 import asyncio
 import pdb
+import os
 
 from patchright.async_api import Browser as PlaywrightBrowser
 from patchright.async_api import (
@@ -51,28 +52,71 @@ class CustomBrowser(Browser):
             screen_size = get_screen_resolution()
             offset_x, offset_y = get_window_adjustments()
 
+        # Filter out unsafe flags from all sets of Chrome arguments
+        filtered_chrome_args = {arg for arg in CHROME_ARGS if arg != '--disable-setuid-sandbox'}
+        filtered_disable_security_args = {arg for arg in CHROME_DISABLE_SECURITY_ARGS if arg != '--disable-setuid-sandbox'}
+        filtered_docker_args = {arg for arg in CHROME_DOCKER_ARGS if arg != '--disable-setuid-sandbox'}
+        
         chrome_args = {
-            *CHROME_ARGS,
-            *(CHROME_DOCKER_ARGS if IN_DOCKER else []),
-            *(CHROME_HEADLESS_ARGS if self.config.headless else []),
-            *(CHROME_DISABLE_SECURITY_ARGS if self.config.disable_security else []),
-            *(CHROME_DETERMINISTIC_RENDERING_ARGS if self.config.deterministic_rendering else []),
-            f'--window-position={offset_x},{offset_y}',
+            *filtered_chrome_args,
+            *CHROME_DETERMINISTIC_RENDERING_ARGS,
             *self.config.extra_browser_args,
         }
-        contain_window_size = False
+
+        if self.config.headless:
+            chrome_args.update(CHROME_HEADLESS_ARGS)
+
+        if self.config.disable_security:
+            chrome_args.update(filtered_disable_security_args)
+
+        if IN_DOCKER:
+            chrome_args.update(filtered_docker_args)
+
+        # Modified port checking logic - assign a random port if running in AWS/ECS
+        remote_debugging_port = '9222'
+        if os.environ.get("AWS_EXECUTION_ENV") or os.environ.get("ECS_CONTAINER_METADATA_URI"):
+            # Don't use the default 9222 port in AWS/ECS to avoid conflicts
+            is_port_in_use = True
+            try_port = 9222
+            while is_port_in_use and try_port < 9300:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    is_port_in_use = s.connect_ex(('localhost', try_port)) == 0
+                if is_port_in_use:
+                    try_port += 1
+            
+            if is_port_in_use:
+                # If all ports tried are in use, don't use remote debugging
+                chrome_args = {arg for arg in chrome_args if not arg.startswith('--remote-debugging')}
+                logger.info(f"All remote debugging ports in range 9222-9300 are in use, disabling remote debugging")
+            else:
+                # Update the port if a free one was found
+                remote_debugging_port = str(try_port)
+                chrome_args = {arg for arg in chrome_args if not arg.startswith('--remote-debugging-port=')}
+                chrome_args.add(f'--remote-debugging-port={remote_debugging_port}')
+                logger.info(f"Using remote debugging port: {remote_debugging_port}")
+        else:
+            # Regular check for local development
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(('localhost', 9222)) == 0:
+                    chrome_args = {arg for arg in chrome_args if not arg.startswith('--remote-debugging-port=')}
+                    logger.info("Port 9222 is already in use, removing remote debugging port argument")
+
+        # FINAL CRUCIAL STEP: Remove any scale factor arguments and ensure ours is the last one
+        chrome_args = {arg for arg in chrome_args if not arg.startswith('--force-device-scale-factor=')}
+        
+        # Find our custom scale factor in extra_browser_args
+        custom_scale_factor = None
         for arg in self.config.extra_browser_args:
-            if "--window-size" in arg:
-                contain_window_size = True
+            if arg.startswith('--force-device-scale-factor='):
+                custom_scale_factor = arg
                 break
-        if not contain_window_size:
-            chrome_args.add(f'--window-size={screen_size["width"]},{screen_size["height"]}')
-
-        # check if port 9222 is already taken, if so remove the remote-debugging-port arg to prevent conflicts
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', 9222)) == 0:
-                chrome_args.remove('--remote-debugging-port=9222')
-
+        
+        # Add it to chrome_args if found
+        if custom_scale_factor:
+            chrome_args.add(custom_scale_factor)
+            
+        logger.info(f"Chrome args: {list(chrome_args)[:10]}")
+        
         browser_class = getattr(playwright, self.config.browser_class)
         args = {
             'chromium': list(chrome_args),

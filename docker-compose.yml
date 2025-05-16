@@ -7,10 +7,12 @@ services:
       args:
         TARGETPLATFORM: ${TARGETPLATFORM:-linux/amd64}
     ports:
-      - "7788:7788"  # Gradio default port
+      - "7788:7788"  # Main Gradio UI port
+      - "8000:8000"  # Alternative port
       - "6080:6080"  # noVNC web interface
       - "5901:5901"  # VNC port
       - "9222:9222"  # Chrome remote debugging port
+      - "7789:7789"  # API server port
     environment:
       - OPENAI_ENDPOINT=${OPENAI_ENDPOINT:-https://api.openai.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -45,6 +47,7 @@ services:
       - VNC_PASSWORD=${VNC_PASSWORD:-vncpassword}
       - CHROME_DEBUGGING_PORT=9222
       - CHROME_DEBUGGING_HOST=localhost
+      - DOCKER_CONTAINER=true
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
     restart: unless-stopped
@@ -56,7 +59,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "5901"]
+      test: ["CMD", "nc", "-z", "localhost", "7788"]
       interval: 10s
       timeout: 5s
       retries: 3

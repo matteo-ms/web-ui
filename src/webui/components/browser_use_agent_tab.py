@@ -6,6 +6,7 @@ import uuid
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import gradio as gr
+from gradio.components import Component
 
 # from browser_use.agent.service import Agent
 from browser_use.agent.views import (
@@ -15,7 +16,6 @@ from browser_use.agent.views import (
 from browser_use.browser.browser import BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextWindowSize
 from browser_use.browser.views import BrowserState
-from gradio.components import Component
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from src.agent.browser_use.browser_use_agent import BrowserUseAgent
@@ -69,7 +69,7 @@ async def _initialize_llm(
 
 def _get_config_value(
     webui_manager: WebuiManager,
-    comp_dict: Dict[gr.components.Component, Any],
+    comp_dict: Dict[Component, Any],
     comp_id_suffix: str,
     default: Any = None,
 ) -> Any:
@@ -187,7 +187,8 @@ async def _handle_new_step(
     # Combine header, image (with line break), and JSON block
     final_content = step_header + "<br/>" + screenshot_html + formatted_output
 
-    chat_message = {
+    # Use type annotation to help type checker
+    chat_message: Dict[str, Optional[str]] = {
         "role": "assistant",
         "content": final_content.strip(),  # Remove leading/trailing whitespace
     }
@@ -217,6 +218,7 @@ def _handle_done(webui_manager: WebuiManager, history: AgentHistoryList):
     else:
         final_summary += "- Status: Success\n"
 
+    # Use type annotation for Dict
     webui_manager.bu_chat_history.append(
         {"role": "assistant", "content": final_summary}
     )
@@ -274,8 +276,8 @@ async def _ask_assistant_callback(
 
 
 async def run_agent_task(
-    webui_manager: WebuiManager, components: Dict[gr.components.Component, Any]
-) -> AsyncGenerator[Dict[gr.components.Component, Any], None]:
+    webui_manager: WebuiManager, components: Dict[Component, Any]
+) -> AsyncGenerator[Dict[Component, Any], None]:
     """Handles the entire lifecycle of initializing and running the agent."""
 
     # --- Get Components ---
@@ -527,6 +529,11 @@ async def run_agent_task(
                 raise ValueError(
                     "Browser or Context not initialized, cannot create agent."
                 )
+            
+            # Check if LLM is available
+            if main_llm is None:
+                raise ValueError("LLM initialization failed. Cannot create agent without an LLM.")
+                
             webui_manager.bu_agent = BrowserUseAgent(
                 task=task,
                 llm=main_llm,
@@ -717,7 +724,7 @@ async def run_agent_task(
         except asyncio.CancelledError:
             logger.info("Agent task was cancelled.")
             if not any(
-                "Cancelled" in msg.get("content", "")
+                "Cancelled" in (msg.get("content", "") or "")
                 for msg in webui_manager.bu_chat_history
                 if msg.get("role") == "assistant"
             ):
@@ -731,7 +738,7 @@ async def run_agent_task(
                 f"**Agent Execution Error:**\n```\n{type(e).__name__}: {e}\n```"
             )
             if not any(
-                error_message in msg.get("content", "")
+                error_message in (msg.get("content", "") or "")
                 for msg in webui_manager.bu_chat_history
                 if msg.get("role") == "assistant"
             ):
@@ -798,7 +805,7 @@ async def run_agent_task(
 
 
 async def handle_submit(
-    webui_manager: WebuiManager, components: Dict[gr.components.Component, Any]
+    webui_manager: WebuiManager, components: Dict[Component, Any]
 ):
     """Handles clicks on the main 'Submit' button."""
     user_input_comp = webui_manager.get_component_by_id("browser_use_agent.user_input")
@@ -915,7 +922,8 @@ async def handle_clear(webui_manager: WebuiManager):
     task = webui_manager.bu_current_task
     if task and not task.done():
         logger.info("Clearing requires stopping the current task.")
-        webui_manager.bu_agent.stop()
+        if webui_manager.bu_agent:
+            webui_manager.bu_agent.stop()
         task.cancel()
         try:
             await asyncio.wait_for(task, timeout=2.0)  # Wait briefly
@@ -1072,10 +1080,10 @@ def create_browser_use_agent_tab(webui_manager: WebuiManager):
 
     # --- Connect Event Handlers using the Wrappers --
     run_button.click(
-        fn=submit_wrapper, inputs=all_managed_components, outputs=run_tab_outputs
+        fn=submit_wrapper, inputs=list(all_managed_components), outputs=run_tab_outputs
     )
     user_input.submit(
-        fn=submit_wrapper, inputs=all_managed_components, outputs=run_tab_outputs
+        fn=submit_wrapper, inputs=list(all_managed_components), outputs=run_tab_outputs
     )
     stop_button.click(fn=stop_wrapper, inputs=None, outputs=run_tab_outputs)
     pause_resume_button.click(

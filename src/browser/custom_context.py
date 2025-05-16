@@ -6,7 +6,8 @@ from browser_use.browser.browser import Browser, IN_DOCKER
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
 from patchright.async_api import Browser as PlaywrightBrowser
 from patchright.async_api import BrowserContext as PlaywrightBrowserContext
-from typing import Optional
+from patchright.async_api import ViewportSize, HttpCredentials, Geolocation
+from typing import Optional, cast
 from browser_use.browser.context import BrowserContextState
 
 logger = logging.getLogger(__name__)
@@ -42,13 +43,16 @@ class CustomBrowserContext(BrowserContext):
                 bypass_csp=self.config.disable_security,
                 ignore_https_errors=self.config.disable_security,
                 record_video_dir=self.config.save_recording_path,
-                record_video_size=self.config.browser_window_size.model_dump(),
+                record_video_size=ViewportSize(
+                    width=self.config.browser_window_size.width,
+                    height=self.config.browser_window_size.height
+                ),
                 record_har_path=self.config.save_har_path,
                 locale=self.config.locale,
-                http_credentials=self.config.http_credentials,
+                http_credentials=cast(HttpCredentials, self.config.http_credentials) if self.config.http_credentials else None,
                 is_mobile=self.config.is_mobile,
                 has_touch=self.config.has_touch,
-                geolocation=self.config.geolocation,
+                geolocation=cast(Geolocation, self.config.geolocation) if self.config.geolocation else None,
                 permissions=self.config.permissions,
                 timezone_id=self.config.timezone_id,
             )
@@ -96,6 +100,29 @@ class CustomBrowserContext(BrowserContext):
 
             // Chrome runtime
             window.chrome = { runtime: {} };
+
+            // Set real zoom on page load - cross-browser
+            document.addEventListener('DOMContentLoaded', function() {
+                // Create a style element
+                const style = document.createElement('style');
+                style.textContent = `
+                    html {
+                        transform: scale(0.8);
+                        transform-origin: 0 0;
+                        width: 125%; /* 100% / 0.7 */
+                        height: 125%; /* 100% / 0.7 */
+                        overflow-x: hidden;
+                    }
+                `;
+                document.head.appendChild(style);
+                
+                // Alternative direct method for Chrome
+                if (document.body) {
+                    document.body.style.zoom = '0.8';
+                }
+                
+                console.log('Applied custom zoom via CSS transform');
+            });
 
             // Permissions
             const originalQuery = window.navigator.permissions.query;
