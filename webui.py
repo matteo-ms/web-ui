@@ -7,11 +7,12 @@ import time
 import random
 import string
 import uuid
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
+from typing import Optional
 
 load_dotenv()
 
@@ -25,6 +26,21 @@ os.makedirs("./tmp", exist_ok=True)
 os.makedirs("./tmp/agent_history", exist_ok=True)
 os.makedirs("./tmp/downloads", exist_ok=True)
 
+# Get API key from environment variable
+API_KEY = os.environ.get("BROWSER_SERVICE_API_KEY")
+if not API_KEY:
+    raise ValueError("BROWSER_SERVICE_API_KEY environment variable must be set. API cannot start without it.")
+
+# Get allowed origins from environment variable
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://6kfncr9i25.eu-central-1.awsapprunner.com")
+if ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS.split(",")]
+else:
+    # Fallback to AppRunner URL only
+    ALLOWED_ORIGINS = ["https://6kfncr9i25.eu-central-1.awsapprunner.com"]
+
+print(f"✅ CORS configured to allow requests only from: {ALLOWED_ORIGINS}")
+
 # Create WebUI manager for agent state management
 webui_manager = WebuiManager()
 
@@ -32,17 +48,27 @@ webui_manager = WebuiManager()
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
 # Mount static files for agent history access
 app.mount("/tmp", StaticFiles(directory="./tmp"), name="agent_files")
 
+# API key verification dependency
+async def verify_api_key(x_api_key: Optional[str] = Header(None)):
+    if x_api_key is None:
+        raise HTTPException(status_code=401, detail="API Key header is missing")
+        
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+        
+    return True
+
 @app.post("/execute-task")
-async def execute_task(request: Request, background_tasks: BackgroundTasks):
+async def execute_task(request: Request, background_tasks: BackgroundTasks, authorized: bool = Depends(verify_api_key)):
     """Execute a browser task using the existing WebUI agent infrastructure"""
     try:
         # Parse and validate the request data
@@ -109,7 +135,7 @@ async def execute_task(request: Request, background_tasks: BackgroundTasks):
         }
 
 @app.get("/task-status/{session_id}")
-async def task_status(session_id: str, request: Request):
+async def task_status(session_id: str, request: Request, authorized: bool = Depends(verify_api_key)):
     """Get status of a browser automation task"""
     try:
         # Check if the agent has a task ID
@@ -278,7 +304,7 @@ async def task_status(session_id: str, request: Request):
         }
 
 @app.post("/task-cancel/{session_id}")
-async def cancel_task(session_id: str):
+async def cancel_task(session_id: str, authorized: bool = Depends(verify_api_key)):
     """Cancel a browser automation task by session ID"""
     try:
         # Check if there's a matching task running
@@ -476,13 +502,13 @@ async def process_agent_task(task, session_id):
         import traceback
         traceback.print_exc()
 
-# Simple healthcheck endpoint
+# Simple healthcheck endpoint - no auth required for this one
 @app.get("/healthcheck")
 async def healthcheck():
     return {"status": "ok", "message": "API server is running"}
 
 @app.get("/task-result/{session_id}")
-async def task_result(session_id: str, request: Request):
+async def task_result(session_id: str, request: Request, authorized: bool = Depends(verify_api_key)):
     """Get complete results of a finished browser automation task"""
     try:
         # Define paths

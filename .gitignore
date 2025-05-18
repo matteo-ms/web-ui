@@ -190,3 +190,8 @@ data/
 *.pdf
 
 workflow
+env-update.json
+new-task-def.json
+register-task-def-v2.json
+register-task-def.json
+task-def.json
