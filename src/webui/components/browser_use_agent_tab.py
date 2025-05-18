@@ -1056,10 +1056,18 @@ def create_browser_use_agent_tab(webui_manager: WebuiManager):
     )  # Get all components known to manager
     run_tab_outputs = list(tab_components.values())
 
-    async def submit_wrapper(
-        components_dict: Dict[Component, Any],
-    ) -> AsyncGenerator[Dict[Component, Any], None]:
+    async def submit_wrapper(*args) -> AsyncGenerator[Dict[Component, Any], None]:
         """Wrapper for handle_submit that yields its results."""
+        # Create components dictionary from the arguments
+        components_dict = {}
+        if len(args) > 0:
+            # Zip component references with their values
+            components = list(all_managed_components)
+            for i, arg in enumerate(args):
+                if i < len(components):
+                    components_dict[components[i]] = arg
+        
+        # Pass the constructed dictionary to handle_submit
         async for update in handle_submit(webui_manager, components_dict):
             yield update
 
