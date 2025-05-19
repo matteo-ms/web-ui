@@ -384,9 +384,7 @@ async def run_agent_task(
 
     browser_binary_path = get_browser_setting("browser_binary_path") or None
     browser_user_data_dir = get_browser_setting("browser_user_data_dir") or None
-    use_own_browser = get_browser_setting(
-        "use_own_browser", False
-    )  # Logic handled by CDP/WSS presence
+    use_own_browser = False  # Forza a false indipendentemente dalle impostazioni UI
     keep_browser_open = get_browser_setting("keep_browser_open", False)
     headless = get_browser_setting("headless", False)
     disable_security = get_browser_setting("disable_security", True)
@@ -452,7 +450,7 @@ async def run_agent_task(
         # Create Browser if needed
         if not webui_manager.bu_browser:
             logger.info("Launching new browser instance.")
-            extra_args = [f"--window-size={window_w},{window_h}"]
+            extra_args = ["--start-maximized"]
             if browser_user_data_dir:
                 extra_args.append(f"--user-data-dir={browser_user_data_dir}")
 
@@ -483,13 +481,12 @@ async def run_agent_task(
             logger.info("Creating new browser context.")
             context_config = CustomBrowserContextConfig(
                 trace_path=save_trace_path if save_trace_path else None,
-                save_recording_path=save_recording_path
-                if save_recording_path
-                else None,
-                save_downloads_path=save_download_path if save_download_path else None,
+                save_recording_path=save_recording_path if save_recording_path else None,
                 browser_window_size=BrowserContextWindowSize(
-                    width=window_w, height=window_h
+                    width=1920, height=1080
                 ),
+                save_downloads_path=save_download_path if save_download_path else None,
+                force_new_context=False,  # Importante: non forzare un nuovo contesto
             )
             if not webui_manager.bu_browser:
                 raise ValueError("Browser not initialized, cannot create context.")

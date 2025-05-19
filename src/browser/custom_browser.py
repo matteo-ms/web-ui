@@ -102,19 +102,8 @@ class CustomBrowser(Browser):
                     logger.info("Port 9222 is already in use, removing remote debugging port argument")
 
         # FINAL CRUCIAL STEP: Remove any scale factor arguments and ensure ours is the last one
-        chrome_args = {arg for arg in chrome_args if not arg.startswith('--force-device-scale-factor=')}
+        chrome_args = chrome_args
         
-        # Find our custom scale factor in extra_browser_args
-        custom_scale_factor = None
-        for arg in self.config.extra_browser_args:
-            if arg.startswith('--force-device-scale-factor='):
-                custom_scale_factor = arg
-                break
-        
-        # Add it to chrome_args if found
-        if custom_scale_factor:
-            chrome_args.add(custom_scale_factor)
-            
         logger.info(f"Chrome args: {list(chrome_args)[:10]}")
         
         browser_class = getattr(playwright, self.config.browser_class)

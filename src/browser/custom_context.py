@@ -28,34 +28,28 @@ class CustomBrowserContext(BrowserContext):
 
     async def _create_context(self, browser: PlaywrightBrowser):
         """Creates a new browser context with anti-detection measures and loads cookies if available."""
-        if not self.config.force_new_context and self.browser.config.cdp_url and len(browser.contexts) > 0:
-            context = browser.contexts[0]
-        elif not self.config.force_new_context and self.browser.config.browser_binary_path and len(
-                browser.contexts) > 0:
-            # Connect to existing Chrome instance instead of creating new one
-            context = browser.contexts[0]
-        else:
-            # Original code for creating new context
-            context = await browser.new_context(
-                no_viewport=True,
-                user_agent=self.config.user_agent,
-                java_script_enabled=True,
-                bypass_csp=self.config.disable_security,
-                ignore_https_errors=self.config.disable_security,
-                record_video_dir=self.config.save_recording_path,
-                record_video_size=ViewportSize(
-                    width=self.config.browser_window_size.width,
-                    height=self.config.browser_window_size.height
-                ),
-                record_har_path=self.config.save_har_path,
-                locale=self.config.locale,
-                http_credentials=cast(HttpCredentials, self.config.http_credentials) if self.config.http_credentials else None,
-                is_mobile=self.config.is_mobile,
-                has_touch=self.config.has_touch,
-                geolocation=cast(Geolocation, self.config.geolocation) if self.config.geolocation else None,
-                permissions=self.config.permissions,
-                timezone_id=self.config.timezone_id,
-            )
+        # Forza sempre la creazione di un nuovo contesto (incognito)
+        logger.info("Creazione di un nuovo contesto browser incognito")
+        context = await browser.new_context(
+            no_viewport=False,
+            user_agent=self.config.user_agent,
+            java_script_enabled=True,
+            bypass_csp=self.config.disable_security,
+            ignore_https_errors=self.config.disable_security,
+            record_video_dir=self.config.save_recording_path,
+            record_video_size=ViewportSize(
+                width=self.config.browser_window_size.width,
+                height=self.config.browser_window_size.height
+            ),
+            record_har_path=self.config.save_har_path,
+            locale=self.config.locale,
+            http_credentials=cast(HttpCredentials, self.config.http_credentials) if self.config.http_credentials else None,
+            is_mobile=self.config.is_mobile,
+            has_touch=self.config.has_touch,
+            geolocation=cast(Geolocation, self.config.geolocation) if self.config.geolocation else None,
+            permissions=self.config.permissions,
+            timezone_id=self.config.timezone_id,
+        )
 
         if self.config.trace_path:
             await context.tracing.start(screenshots=True, snapshots=True, sources=True)
@@ -101,29 +95,12 @@ class CustomBrowserContext(BrowserContext):
             // Chrome runtime
             window.chrome = { runtime: {} };
 
-            // Set real zoom on page load - cross-browser
-            document.addEventListener('DOMContentLoaded', function() {
-                // Create a style element
-                const style = document.createElement('style');
-                style.textContent = `
-                    html {
-                        transform: scale(0.8);
-                        transform-origin: 0 0;
-                        width: 125%; /* 100% / 0.7 */
-                        height: 125%; /* 100% / 0.7 */
-                        overflow-x: hidden;
-                    }
-                `;
-                document.head.appendChild(style);
-                
-                // Alternative direct method for Chrome
-                if (document.body) {
-                    document.body.style.zoom = '0.8';
-                }
-                
-                console.log('Applied custom zoom via CSS transform');
+            // Aggiungiamo supporto per viewport responsive
+            window.addEventListener('resize', function() {
+                // Informa l'applicazione del resize per adattare l'interfaccia
+                window.dispatchEvent(new Event('responsive-resize'));
             });
-
+            
             // Permissions
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (

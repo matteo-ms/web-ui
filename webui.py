@@ -391,24 +391,32 @@ async def process_agent_task(task, session_id):
                 temperature=0.2
             )
             
-            # Initialize the browser with basic settings
+            # Check if we should connect to the persistent browser
+            # Force always creating a new browser by overriding the environment variable
+            use_persistent_browser = False  # Ignoriamo la variabile d'ambiente
+            
+            # Create a new browser instance (always)
+            print("Creating new browser instance in incognito mode")
             browser_config = BrowserConfig(
                 headless=False,
                 disable_security=True,
-                extra_browser_args=["--force-device-scale-factor=1", "--disable-default-apps"]
+                extra_browser_args=["--disable-default-apps", "--start-maximized", "--kiosk", "--window-size=1920,1080"]
             )
+            
             webui_manager.bu_browser = CustomBrowser(config=browser_config)
             
-            # Create browser context
+            # Create browser context with force_new_context=False to use existing window
             context_config = CustomBrowserContextConfig(
+                # Utilizziamo dimensioni esplicite a schermo intero
                 browser_window_size=BrowserContextWindowSize(
-                    width=1280, height=1100
+                    width=1920, height=1080  # Dimensioni esplicite per schermo intero
                 ),
-                save_downloads_path="./tmp/downloads"
+                save_downloads_path="./tmp/downloads",
+                force_new_context=False
             )
             webui_manager.bu_browser_context = await webui_manager.bu_browser.new_context(config=context_config)
             
-            # Set zoom through CDP immediately after context creation
+            # Aggiungiamo configurazione per forzare il browser a schermo intero
             try:
                 playwright_browser = webui_manager.bu_browser.playwright_browser
                 if playwright_browser and hasattr(playwright_browser, "contexts") and len(playwright_browser.contexts) > 0:
@@ -420,12 +428,12 @@ async def process_agent_task(task, session_id):
                     else:
                         page = pages[0]
                     
-                    # Use CDP to set zoom level to 50%
-                    client = await page.context.new_cdp_session(page)
-                    await client.send("Emulation.setPageScaleFactor", {"pageScaleFactor": 0.5})
-                    print("✅ Applied browser zoom via CDP")
+                    # Forziamo la modalità schermo intero via CDP
+                    await page.evaluate("document.documentElement.requestFullscreen()")
+                    await page.evaluate("window.resizeTo(screen.width, screen.height)")
+                    print("✅ Browser configurato a risoluzione piena e modalità schermo intero")
             except Exception as e:
-                print(f"❌ Error applying zoom via CDP: {e}")
+                print(f"❌ Error initializing browser context: {e}")
             
             # Initialize controller if needed
             if not webui_manager.bu_controller:

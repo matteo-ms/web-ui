@@ -190,7 +190,7 @@ CHROME_PERSISTENT_SESSION=true docker compose up --build
    - For ARM64 systems (e.g., Apple Silicon Macs), the container will automatically use the appropriate image
 
 3. **Browser Persistence Modes:**
-   - **Default Mode (CHROME_PERSISTENT_SESSION=false):**
+   - **Default Mode (CHROME_PERSISTENT_SESSION=true):**
      - Browser opens and closes with each AI task
      - Clean state for each interaction
      - Lower resource usage
