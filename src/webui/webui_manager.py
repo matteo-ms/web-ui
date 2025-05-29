@@ -26,6 +26,48 @@ class WebuiManager:
         self.settings_save_dir = settings_save_dir
         os.makedirs(self.settings_save_dir, exist_ok=True)
 
+        # Add mapping for session_id to unique task_id
+        self.session_to_task_mapping: Dict[str, str] = {}
+        self.mapping_file = os.path.join(self.settings_save_dir, "session_mapping.json")
+        self._load_session_mapping()
+
+    def _load_session_mapping(self):
+        """Load session mapping from disk"""
+        try:
+            if os.path.exists(self.mapping_file):
+                with open(self.mapping_file, 'r') as f:
+                    self.session_to_task_mapping = json.load(f)
+                print(f"📂 Loaded {len(self.session_to_task_mapping)} session mappings from disk")
+        except Exception as e:
+            print(f"❌ Error loading session mapping: {e}")
+            self.session_to_task_mapping = {}
+    
+    def _save_session_mapping(self):
+        """Save session mapping to disk"""
+        try:
+            with open(self.mapping_file, 'w') as f:
+                json.dump(self.session_to_task_mapping, f, indent=2)
+            print(f"💾 Saved {len(self.session_to_task_mapping)} session mappings to disk")
+        except Exception as e:
+            print(f"❌ Error saving session mapping: {e}")
+    
+    def add_session_mapping(self, session_id: str, task_id: str):
+        """Add a session to task mapping and persist it"""
+        self.session_to_task_mapping[session_id] = task_id
+        self._save_session_mapping()
+        print(f"🔗 Added mapping: {session_id} -> {task_id}")
+    
+    def remove_session_mapping(self, session_id: str):
+        """Remove a session mapping and persist the change"""
+        if session_id in self.session_to_task_mapping:
+            del self.session_to_task_mapping[session_id]
+            self._save_session_mapping()
+            print(f"🗑️ Removed mapping for session: {session_id}")
+    
+    def get_task_id_for_session(self, session_id: str) -> Optional[str]:
+        """Get the task ID for a given session ID"""
+        return self.session_to_task_mapping.get(session_id)
+
     def init_browser_use_agent(self) -> None:
         """
         init browser use agent
@@ -76,43 +118,50 @@ class WebuiManager:
         """
         return self.component_to_id[comp]
 
-    def save_config(self, components: Dict["Component", str]) -> None:
+    def save_config(self, components: Dict["Component", str]) -> str:
         """
-        Save config
+        Save the current configuration to a JSON file.
+        
+        Args:
+            components: Dictionary mapping components to their values
+            
+        Returns:
+            str: Path to the saved configuration file
         """
+        config_name = f"config_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        config_file = os.path.join(self.settings_save_dir, f"{config_name}.json")
+        
         cur_settings = {}
-        for comp in components:
-            if not isinstance(comp, gr.Button) and not isinstance(comp, gr.File) and str(
-                    getattr(comp, "interactive", True)).lower() != "false":
-                comp_id = self.get_id_by_component(comp)
-                cur_settings[comp_id] = components[comp]
+        for comp, value in components.items():
+            comp_id = self.get_id_by_component(comp)
+            if comp_id:
+                cur_settings[comp_id] = value
 
-        config_name = datetime.now().strftime("%Y%m%d-%H%M%S")
-        with open(os.path.join(self.settings_save_dir, f"{config_name}.json"), "w") as fw:
+        with open(config_file, "w") as fw:
             json.dump(cur_settings, fw, indent=4)
 
         return os.path.join(self.settings_save_dir, f"{config_name}.json")
 
     def load_config(self, config_path: str):
         """
-        Load config
+        Load configuration from a JSON file and return component updates.
+        
+        Args:
+            config_path: Path to the configuration file
+            
+        Returns:
+            Dict mapping components to their updated values
         """
-        with open(config_path, "r") as fr:
-            ui_settings = json.load(fr)
-
         update_components = {}
-        for comp_id, comp_val in ui_settings.items():
-            if comp_id in self.id_to_component:
+        if os.path.exists(config_path):
+            with open(config_path, "r") as fr:
+                config_data = json.load(fr)
+            
+            for comp_id, comp_val in config_data.items():
                 comp = self.id_to_component[comp_id]
                 if comp.__class__.__name__ == "Chatbot":
-                    update_components[comp] = comp.__class__(value=comp_val, type="messages")
+                    update_components[comp] = comp.__class__(value=comp_val)
                 else:
                     update_components[comp] = comp.__class__(value=comp_val)
 
-        config_status = self.id_to_component["load_save_config.config_status"]
-        update_components.update(
-            {
-                config_status: config_status.__class__(value=f"Successfully loaded config: {config_path}")
-            }
-        )
-        yield update_components
+        return update_components

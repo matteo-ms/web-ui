@@ -13,6 +13,7 @@ import uvicorn
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from typing import Optional
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -135,12 +136,30 @@ async def execute_task(request: Request, background_tasks: BackgroundTasks, auth
         }
 
 @app.get("/task-status/{session_id}")
-async def task_status(session_id: str, request: Request, authorized: bool = Depends(verify_api_key)):
+async def task_status(session_id: str, request: Request, detailed: bool = False, minimal: bool = False, authorized: bool = Depends(verify_api_key)):
     """Get status of a browser automation task"""
     try:
-        # Check if the agent has a task ID
-        agent_task_id = getattr(webui_manager, "bu_agent_task_id", None)
-        if not agent_task_id:
+        # Check if we have a mapping to the latest task for this session
+        current_task_id = webui_manager.get_task_id_for_session(session_id)
+        if current_task_id:
+            print(f"✅ Found task mapping: {session_id} -> {current_task_id}")
+        else:
+            # Fallback to current agent task ID
+            current_task_id = getattr(webui_manager, "bu_agent_task_id", None)
+            if not current_task_id:
+                # Final fallback: try to find the most recent task directory
+                history_base = "./tmp/agent_history"
+                if os.path.exists(history_base):
+                    # Look for directories that contain the session_id or are recent
+                    task_dirs = [d for d in os.listdir(history_base) 
+                               if os.path.isdir(os.path.join(history_base, d))]
+                    if task_dirs:
+                        # Sort by modification time and get the most recent
+                        task_dirs.sort(key=lambda x: os.path.getmtime(os.path.join(history_base, x)), reverse=True)
+                        current_task_id = task_dirs[0]
+                        print(f"🔄 Using fallback task ID: {current_task_id}")
+        
+        if not current_task_id:
             return {
                 "success": False,
                 "status": "not_found",
@@ -160,50 +179,68 @@ async def task_status(session_id: str, request: Request, authorized: bool = Depe
         state = agent.state
         history = getattr(state, "history", None)
         
-        # Base output path
-        output_base_path = f"/tmp/agent_history/{agent_task_id}"
+        # Determine task status
+        task_is_done = history and history.is_done()
+        is_stopped = state.stopped
+        is_paused = state.paused
+        
+        # Check for files
+        local_history_path = f"./tmp/agent_history/{current_task_id}/{current_task_id}.json"
+        local_gif_path = f"./tmp/agent_history/{current_task_id}/{current_task_id}.gif"
+        has_history = os.path.exists(local_history_path)
+        has_gif = os.path.exists(local_gif_path)
+        
+        # Determine final status
+        status = "running"
+        if is_stopped:
+            status = "stopped"
+        elif is_paused:
+            status = "paused"
+        elif task_is_done:
+            if has_history and has_gif:
+                status = "completed"
+            elif has_history or has_gif:
+                status = "finishing"
+            else:
+                status = "completed"
+        
+        # Ultra-minimal response for backend integration
+        if minimal:
+            return {
+                "status": status,
+                "task_id": current_task_id,
+                "has_files": has_history or has_gif
+            }
+        
+        # Base output path using the current task ID
+        output_base_path = f"/tmp/agent_history/{current_task_id}"
         server_base_url = f"{request.url.scheme}://{request.url.netloc}"
         
-        # Get output paths
-        history_path = f"{output_base_path}/{agent_task_id}.json"
-        gif_path = f"{output_base_path}/{agent_task_id}.gif"
-        local_history_path = f"./tmp/agent_history/{agent_task_id}/{agent_task_id}.json"
-        local_gif_path = f"./tmp/agent_history/{agent_task_id}/{agent_task_id}.gif"
+        # Get output paths using current task ID
+        history_path = f"{output_base_path}/{current_task_id}.json"
+        gif_path = f"{output_base_path}/{current_task_id}.gif"
         
-        # Prepare basic response
-        status = "running"
-        if state.stopped:
-            status = "stopped"
-        elif state.paused:
-            status = "paused"
-        elif history and history.is_done():
-            # Only mark as completed if all output files exist
-            # Wait up to 2 seconds for files to be created before responding
+        # For completed tasks, wait longer for files to be created
+        if task_is_done and not detailed:
+            print(f"🏁 Task {current_task_id} marked as done by agent, waiting for files...")
             wait_count = 0
-            while (wait_count < 4 and 
-                  not (os.path.exists(local_history_path) and 
-                       os.path.exists(local_gif_path))):
+            max_wait_attempts = 10
+            
+            while (wait_count < max_wait_attempts and 
+                  not (os.path.exists(local_history_path) and os.path.exists(local_gif_path))):
                 wait_count += 1
-                time.sleep(0.5)  # Wait briefly for files to be created
-                print(f"Waiting for output files to be created, attempt {wait_count}/4")
-            
-            if os.path.exists(local_history_path) and os.path.exists(local_gif_path):
-                status = "completed"
-                print(f"Task {agent_task_id} confirmed completed with all resources available")
-            else:
-                status = "finishing"  # New intermediate status
-                print(f"Task {agent_task_id} is done but resources not ready yet. "
-                      f"History: {os.path.exists(local_history_path)}, "
-                      f"GIF: {os.path.exists(local_gif_path)}")
-            
-        # Prepare detailed results for Node.js
-        steps_data = []
-        error_messages = []
+                await asyncio.sleep(0.5)
+                print(f"   Waiting for files... attempt {wait_count}/{max_wait_attempts}")
+                print(f"   History: {os.path.exists(local_history_path)}, GIF: {os.path.exists(local_gif_path)}")
+        
+        # Prepare basic response data
         final_result_text = ""
         duration_seconds = 0
         total_tokens = 0
+        error_messages = []
+        steps_data = []
         
-        # Extract detailed result information if available
+        # Extract result information if available
         if history:
             # Get final result text
             final_result_text = history.final_result() or ""
@@ -217,84 +254,104 @@ async def task_status(session_id: str, request: Request, authorized: bool = Depe
             if errors and any(errors):
                 error_messages = errors
                 
-            # Get steps information if available
-            steps = getattr(history, "steps", [])
-            if steps:
-                for i, step in enumerate(steps):
-                    step_data = {
-                        "step_number": i + 1,
-                        "action": getattr(step, "action", ""),
-                        "status": "completed"
-                    }
-                    steps_data.append(step_data)
+            # Only get detailed steps if requested
+            if detailed:
+                steps = getattr(history, "steps", [])
+                if steps:
+                    for i, step in enumerate(steps):
+                        step_data = {
+                            "step_number": i + 1,
+                            "action": getattr(step, "action", ""),
+                            "status": "completed"
+                        }
+                        steps_data.append(step_data)
         
+        # Basic lightweight response
         response = {
             "success": True,
             "status": status,
             "steps": state.n_steps,
-            "session_id": agent_task_id,
+            "session_id": current_task_id,  # Return the actual task ID being used
             "result": {
                 "text": final_result_text,
                 "success": status == "completed" and not error_messages,
                 "duration_seconds": duration_seconds,
                 "total_tokens": total_tokens,
-                "steps": steps_data,
-                "errors": error_messages
+                "has_errors": bool(error_messages)
             }
         }
         
-        # Add paths if they exist
-        resource_paths = {}
-        
-        # Add history JSON content if file exists
-        history_json_content = None
+        # Add basic URLs if files exist
         if os.path.exists(local_history_path):
-            resource_paths["history_json"] = {
-                "local_path": local_history_path,
-                "url": f"{server_base_url}{history_path}"
-            }
-            response["historyUrl"] = f"{server_base_url}{history_path}"
+            history_url = f"{server_base_url}{history_path}"
+            response["historyUrl"] = history_url
+            print(f"📄 History URL: {history_url}")
             
-            # Read and include the full history JSON content
-            try:
-                with open(local_history_path, 'r') as f:
-                    history_json_content = json.load(f)
-                response["historyContent"] = history_json_content
-            except json.JSONDecodeError as e:
-                print(f"Error parsing history JSON file: {e}")
-        
         if os.path.exists(local_gif_path):
-            resource_paths["recording_gif"] = {
-                "local_path": local_gif_path,
-                "url": f"{server_base_url}{gif_path}"
-            }
-            response["gifUrl"] = f"{server_base_url}{gif_path}"
+            gif_url = f"{server_base_url}{gif_path}"
+            response["gifUrl"] = gif_url
+            print(f"🎬 GIF URL: {gif_url}")
             
-        # Add screenshots if available
-        screenshots_dir = f"./tmp/agent_history/{agent_task_id}"
-        if os.path.exists(screenshots_dir):
-            screenshot_files = [f for f in os.listdir(screenshots_dir) if f.startswith("step_") and f.endswith(".jpg")]
-            if screenshot_files:
-                resource_paths["screenshots"] = []
-                for screenshot in screenshot_files:
-                    step_num = screenshot.replace("step_", "").replace(".jpg", "")
-                    screenshot_path = f"/tmp/agent_history/{agent_task_id}/{screenshot}"
-                    resource_paths["screenshots"].append({
-                        "step": step_num,
-                        "local_path": f"{screenshots_dir}/{screenshot}",
-                        "url": f"{server_base_url}{screenshot_path}"
-                    })
+        # Only include detailed data if requested
+        if detailed:
+            response["result"]["steps"] = steps_data
+            response["result"]["errors"] = error_messages
+            
+            # Add full history content
+            if os.path.exists(local_history_path):
+                try:
+                    with open(local_history_path, 'r') as f:
+                        history_json_content = json.load(f)
+                    response["historyContent"] = history_json_content
+                except json.JSONDecodeError as e:
+                    print(f"❌ Error parsing history JSON file: {e}")
+            
+            # Add resource paths
+            resource_paths = {}
+            
+            if os.path.exists(local_history_path):
+                resource_paths["history_json"] = {
+                    "local_path": local_history_path,
+                    "url": response["historyUrl"]
+                }
+            
+            if os.path.exists(local_gif_path):
+                resource_paths["recording_gif"] = {
+                    "local_path": local_gif_path,
+                    "url": response["gifUrl"]
+                }
+            
+            # Add screenshots if available
+            screenshots_dir = f"./tmp/agent_history/{current_task_id}"
+            if os.path.exists(screenshots_dir):
+                screenshot_files = [f for f in os.listdir(screenshots_dir) if f.startswith("step_") and f.endswith(".jpg")]
+                if screenshot_files:
+                    resource_paths["screenshots"] = []
+                    for screenshot in screenshot_files:
+                        step_num = screenshot.replace("step_", "").replace(".jpg", "")
+                        screenshot_path = f"/tmp/agent_history/{current_task_id}/{screenshot}"
+                        resource_paths["screenshots"].append({
+                            "step": step_num,
+                            "local_path": f"{screenshots_dir}/{screenshot}",
+                            "url": f"{server_base_url}{screenshot_path}"
+                        })
+            
+            response["resources"] = resource_paths
         
-        # Add all resource paths to the response
-        response["resources"] = resource_paths
-        
-        # Log the full response to help with debugging
-        print(f"Sending task status for {agent_task_id}: {status}, with resources: {list(resource_paths.keys()) if resource_paths else 'none'}")
+        # Enhanced logging
+        available_resources = []
+        if "historyUrl" in response:
+            available_resources.append("history")
+        if "gifUrl" in response:
+            available_resources.append("gif")
+            
+        print(f"📊 Task {current_task_id} status: {status}")
+        print(f"📁 Resources available: {', '.join(available_resources) if available_resources else 'none'}")
         
         return response
         
     except Exception as e:
-        print(f"Error in task_status: {e}")
+        print(f"❌ Error in task_status: {e}")
         import traceback
         traceback.print_exc()
         return {
@@ -307,20 +364,17 @@ async def task_status(session_id: str, request: Request, authorized: bool = Depe
 async def cancel_task(session_id: str, authorized: bool = Depends(verify_api_key)):
     """Cancel a browser automation task by session ID"""
     try:
-        # Check if there's a matching task running
-        agent_task_id = getattr(webui_manager, "bu_agent_task_id", None)
+        # Get the current unique task ID for this session using the new method
+        current_task_id = webui_manager.get_task_id_for_session(session_id)
+        if not current_task_id:
+            current_task_id = getattr(webui_manager, "bu_agent_task_id", None)
+        
         agent = getattr(webui_manager, "bu_agent", None)
         
-        if not agent_task_id or not agent:
+        if not current_task_id or not agent:
             return {
                 "success": False,
                 "error": "No active task found"
-            }
-            
-        if agent_task_id != session_id:
-            return {
-                "success": False, 
-                "error": f"Session ID mismatch. Current session is {agent_task_id}, not {session_id}"
             }
         
         # Stop the agent
@@ -331,9 +385,12 @@ async def cancel_task(session_id: str, authorized: bool = Depends(verify_api_key
         if current_task and not current_task.done():
             current_task.cancel()
             
+        # Remove the mapping for this session using the new method
+        webui_manager.remove_session_mapping(session_id)
+            
         return {
             "success": True,
-            "message": f"Task with session ID {session_id} has been cancelled"
+            "message": f"Task with session ID {session_id} (task ID: {current_task_id}) has been cancelled"
         }
     except Exception as e:
         print(f"Error cancelling task: {e}")
@@ -349,164 +406,224 @@ async def process_agent_task(task, session_id):
     """Process the agent task using the existing WebUI infrastructure"""
     print(f"Starting agent task: {task}")
     
+    # Generate a unique task_id for this specific task execution
+    # This ensures each task gets its own directory and files
+    timestamp = int(time.time() * 1000)
+    random_str = ''.join(
+        random.choices(string.ascii_lowercase + string.digits, k=8)
+    )
+    unique_task_id = f"task-{timestamp}-{random_str}"
+    
+    print(f"Generated unique task ID: {unique_task_id} for session: {session_id}")
+    
     # Initialize WebUI manager if needed
     if not hasattr(webui_manager, "bu_chat_history"):
         webui_manager.init_browser_use_agent()
     
-    # Use the proper initialization methods from the webui_manager
+    # Clear previous chat history and reset it for new task
+    webui_manager.bu_chat_history = []
     webui_manager.bu_chat_history.append({"role": "user", "content": task})
     
-    # Generate a task ID that matches the session ID format
-    webui_manager.bu_agent_task_id = session_id
+    # Set the unique task ID instead of reusing session_id
+    webui_manager.bu_agent_task_id = unique_task_id
     
     # Create required directories for output files
     os.makedirs("./tmp/agent_history", exist_ok=True)
     os.makedirs("./tmp/downloads", exist_ok=True)
     
-    # Create session-specific directory
-    session_dir = f"./tmp/agent_history/{session_id}"
-    os.makedirs(session_dir, exist_ok=True)
+    # Create task-specific directory using the unique task ID
+    task_dir = f"./tmp/agent_history/{unique_task_id}"
+    os.makedirs(task_dir, exist_ok=True)
     
     try:
-        # Skip the run_agent_task function and use the agent directly
-        if not webui_manager.bu_agent:
-            # Initialize the agent if not already done
-            from src.agent.browser_use.browser_use_agent import BrowserUseAgent
-            from src.browser.custom_browser import CustomBrowser
-            from src.browser.custom_context import CustomBrowserContextConfig
-            from browser_use.browser.browser import BrowserConfig
-            from browser_use.browser.context import BrowserContextWindowSize
-            from browser_use.browser.views import BrowserState
-            from browser_use.agent.views import AgentOutput, AgentHistoryList
+        # Check if we should keep the browser open between tasks
+        persistent_session = os.environ.get("CHROME_PERSISTENT_SESSION", "true").lower() in ["true", "1", "yes", "y"]
+        
+        # Initialize LLM
+        from src.agent.browser_use.browser_use_agent import BrowserUseAgent
+        from src.browser.custom_browser import CustomBrowser
+        from src.browser.custom_context import CustomBrowserContextConfig
+        from browser_use.browser.browser import BrowserConfig
+        from browser_use.browser.context import BrowserContextWindowSize
+        from browser_use.browser.views import BrowserState
+        from browser_use.agent.views import AgentOutput, AgentHistoryList
+        
+        # Initialize the LLM - use appropriate provider and model
+        default_provider = os.environ.get("DEFAULT_LLM_PROVIDER", "openai")
+        default_model = os.environ.get("DEFAULT_LLM_MODEL", "gpt-4o")
+        
+        llm = llm_provider.get_llm_model(
+            provider=default_provider,
+            model_name=default_model,
+            temperature=0.2
+        )
+        
+        # Reuse existing browser if persistent_session is enabled and browser exists
+        if persistent_session and hasattr(webui_manager, "bu_browser") and webui_manager.bu_browser:
+            print("🔄 Reusing existing browser instance as CHROME_PERSISTENT_SESSION=true")
+            # Clean up only the agent, not the browser
+            if hasattr(webui_manager, "bu_agent") and webui_manager.bu_agent:
+                try:
+                    webui_manager.bu_agent.state.stopped = True
+                    webui_manager.bu_agent = None
+                except Exception as e:
+                    print(f"⚠️ Warning during agent cleanup: {e}")
+        else:
+            # Create a fresh browser instance if we don't have one or persistence is disabled
+            print("🌐 Creating new browser instance")
             
-            # Initialize the LLM - use appropriate provider and model
-            # First check environment variables
-            default_provider = os.environ.get("DEFAULT_LLM_PROVIDER", "openai")
-            default_model = os.environ.get("DEFAULT_LLM_MODEL", "gpt-4o")
+            # Clean up previous browser and agent if they exist
+            if hasattr(webui_manager, "bu_agent") and webui_manager.bu_agent:
+                try:
+                    webui_manager.bu_agent.state.stopped = True
+                    webui_manager.bu_agent = None
+                except Exception as e:
+                    print(f"⚠️ Warning during agent cleanup: {e}")
+                    
+            if hasattr(webui_manager, "bu_browser") and webui_manager.bu_browser:
+                try:
+                    await webui_manager.bu_browser.close()
+                    webui_manager.bu_browser = None
+                    webui_manager.bu_browser_context = None
+                except Exception as e:
+                    print(f"⚠️ Warning during browser cleanup: {e}")
             
-            # Initialize LLM
-            llm = llm_provider.get_llm_model(
-                provider=default_provider,
-                model_name=default_model,
-                temperature=0.2
-            )
-            
-            # Check if we should connect to the persistent browser
-            # Force always creating a new browser by overriding the environment variable
-            use_persistent_browser = False  # Ignoriamo la variabile d'ambiente
-            
-            # Create a new browser instance (always)
-            print("Creating new browser instance in incognito mode")
             browser_config = BrowserConfig(
                 headless=False,
                 disable_security=True,
-                extra_browser_args=["--disable-default-apps", "--start-maximized", "--kiosk", "--window-size=1920,1080"]
+                extra_browser_args=[
+                    "--disable-default-apps", 
+                    "--start-maximized", 
+                    "--kiosk", 
+                    "--window-size=9999,9999", 
+                    "--start-fullscreen",
+                    "--ash-force-desktop"
+                ]
             )
             
             webui_manager.bu_browser = CustomBrowser(config=browser_config)
             
-            # Create browser context with force_new_context=False to use existing window
+            # Create browser context
             context_config = CustomBrowserContextConfig(
-                # Utilizziamo dimensioni esplicite a schermo intero
-                browser_window_size=BrowserContextWindowSize(
-                    width=1920, height=1080  # Dimensioni esplicite per schermo intero
-                ),
+                browser_window_size=BrowserContextWindowSize(width=1920, height=1080),
                 save_downloads_path="./tmp/downloads",
-                force_new_context=False
+                force_new_context=True
             )
             webui_manager.bu_browser_context = await webui_manager.bu_browser.new_context(config=context_config)
             
-            # Aggiungiamo configurazione per forzare il browser a schermo intero
+            # Configure browser for full screen
             try:
                 playwright_browser = webui_manager.bu_browser.playwright_browser
                 if playwright_browser and hasattr(playwright_browser, "contexts") and len(playwright_browser.contexts) > 0:
                     context = playwright_browser.contexts[0]
-                    # Create a page if none exists
                     pages = context.pages
                     if len(pages) == 0:
                         page = await context.new_page()
                     else:
                         page = pages[0]
                     
-                    # Forziamo la modalità schermo intero via CDP
-                    await page.evaluate("document.documentElement.requestFullscreen()")
-                    await page.evaluate("window.resizeTo(screen.width, screen.height)")
-                    print("✅ Browser configurato a risoluzione piena e modalità schermo intero")
-            except Exception as e:
-                print(f"❌ Error initializing browser context: {e}")
-            
-            # Initialize controller if needed
-            if not webui_manager.bu_controller:
-                from src.controller.custom_controller import CustomController
-                webui_manager.bu_controller = CustomController()
-            
-            # Define simple callback functions for step and completion tracking
-            async def step_callback(state: BrowserState, output: AgentOutput, step_num: int):
-                print(f"Step {step_num} completed.")
-                # Save screenshot to disk if available
-                screenshot_data = getattr(state, "screenshot", None)
-                if screenshot_data and isinstance(screenshot_data, str) and len(screenshot_data) > 100:
-                    screenshot_dir = f"./tmp/agent_history/{session_id}"
-                    os.makedirs(screenshot_dir, exist_ok=True)
-                    with open(f"{screenshot_dir}/step_{step_num}.jpg", "wb") as f:
-                        import base64
-                        f.write(base64.b64decode(screenshot_data))
-            
-            def done_callback(history: AgentHistoryList):
-                print(f"Task completed. Duration: {history.total_duration_seconds():.2f}s")
-                # Check for errors
-                errors = history.errors()
-                if errors and any(errors):
-                    print(f"Errors during execution: {errors}")
-                else:
-                    print("Status: Success")
+                    # Imposta la modalità schermo intero sia tramite JavaScript che tramite CSS
+                    await page.evaluate("""() => {
+                        document.documentElement.requestFullscreen().catch(e => console.error('Fullscreen error:', e));
+                        if (window.screen) {
+                            window.resizeTo(window.screen.availWidth, window.screen.availHeight);
+                            window.moveTo(0, 0);
+                        }
+                        document.documentElement.style.overflow = 'hidden';
+                        document.body.style.overflow = 'hidden';
+                        document.documentElement.style.margin = '0';
+                        document.body.style.margin = '0';
+                        document.documentElement.style.padding = '0';
+                        document.body.style.padding = '0';
+                    }""")
                     
-                # Save final result
-                final_result = history.final_result()
-                if final_result:
-                    print(f"Final result: {final_result}")
-            
-            # Set up agent settings for GIF generation
-            gif_path = f"{session_dir}/{session_id}.gif"
-            
-            # Initialize the agent with minimal settings
-            webui_manager.bu_agent = BrowserUseAgent(
-                task=task,
-                llm=llm,
-                browser=webui_manager.bu_browser,
-                browser_context=webui_manager.bu_browser_context,
-                controller=webui_manager.bu_controller,
-                register_new_step_callback=step_callback,
-                register_done_callback=done_callback,
-                use_vision=True,
-                source="api"
-            )
-            
-            # Set the GIF generation path
-            webui_manager.bu_agent.settings.generate_gif = gif_path
-        else:
-            # If agent already exists, just add a new task
-            webui_manager.bu_agent.add_new_task(task)
-            
-            # Update the GIF generation path for the new session
-            gif_path = f"{session_dir}/{session_id}.gif"
-            webui_manager.bu_agent.settings.generate_gif = gif_path
+                    # Imposta le dimensioni della viewport al massimo possibile
+                    viewport_size = await page.evaluate("""() => {
+                        return {
+                            width: window.screen ? window.screen.availWidth : 1920,
+                            height: window.screen ? window.screen.availHeight : 1080
+                        }
+                    }""")
+                    
+                    await page.set_viewport_size(viewport_size)
+                    print(f"✅ Browser configurato in modalità schermo intero: {viewport_size}")
+            except Exception as e:
+                print(f"❌ Error configuring browser for fullscreen: {e}")
         
-        # Set the agent ID to match the session ID
-        webui_manager.bu_agent.state.agent_id = session_id
+        # Initialize controller if needed
+        if not webui_manager.bu_controller:
+            from src.controller.custom_controller import CustomController
+            webui_manager.bu_controller = CustomController()
         
-        # Run the agent directly (max 30 steps)
+        # Define callback functions for step and completion tracking
+        async def step_callback(state: BrowserState, output: AgentOutput, step_num: int):
+            print(f"Step {step_num} completed for task {unique_task_id}")
+            # Save screenshot to disk using the unique task ID
+            screenshot_data = getattr(state, "screenshot", None)
+            if screenshot_data and isinstance(screenshot_data, str) and len(screenshot_data) > 100:
+                screenshot_dir = f"./tmp/agent_history/{unique_task_id}"
+                os.makedirs(screenshot_dir, exist_ok=True)
+                with open(f"{screenshot_dir}/step_{step_num}.jpg", "wb") as f:
+                    import base64
+                    f.write(base64.b64decode(screenshot_data))
+        
+        def done_callback(history: AgentHistoryList):
+            print(f"Task {unique_task_id} completed. Duration: {history.total_duration_seconds():.2f}s")
+            errors = history.errors()
+            if errors and any(errors):
+                print(f"Errors during execution: {errors}")
+            else:
+                print("Status: Success")
+                
+            final_result = history.final_result()
+            if final_result:
+                print(f"Final result: {final_result}")
+        
+        # Set up agent settings for GIF generation using unique task ID
+        gif_path = f"{task_dir}/{unique_task_id}.gif"
+        
+        # Create agent instance
+        print(f"🤖 Creating agent instance for task: {unique_task_id}")
+        webui_manager.bu_agent = BrowserUseAgent(
+            task=task,
+            llm=llm,
+            browser=webui_manager.bu_browser,
+            browser_context=webui_manager.bu_browser_context,
+            controller=webui_manager.bu_controller,
+            register_new_step_callback=step_callback,
+            register_done_callback=done_callback,
+            use_vision=True,
+            source="api"
+        )
+        
+        # Set the GIF generation path for this specific task
+        webui_manager.bu_agent.settings.generate_gif = gif_path
+        
+        # Set the agent ID to match the unique task ID for complete isolation
+        webui_manager.bu_agent.state.agent_id = unique_task_id
+        
+        # Store the mapping between session_id and unique_task_id
+        webui_manager.add_session_mapping(session_id, unique_task_id)
+        
+        # Legacy compatibility
+        if not hasattr(webui_manager, "session_to_task_mapping"):
+            webui_manager.session_to_task_mapping = {}
+        webui_manager.session_to_task_mapping[session_id] = unique_task_id
+        
+        print(f"🚀 Running agent for task {unique_task_id}")
+        
+        # Run the agent with max 30 steps
         await webui_manager.bu_agent.run(max_steps=30)
         
-        print(f"Task {session_id} completed")
+        print(f"✅ Task {unique_task_id} execution completed")
         
-        # Save history
-        history_file = f"{session_dir}/{session_id}.json"
+        # Save history using unique task ID
+        history_file = f"{task_dir}/{unique_task_id}.json"
         webui_manager.bu_agent.save_history(history_file)
+        print(f"💾 History saved to: {history_file}")
         
     except Exception as e:
-        print(f"Error executing agent task: {e}")
-        # Add more detailed error logging
+        print(f"❌ Error executing agent task {unique_task_id}: {e}")
         import traceback
         traceback.print_exc()
 
@@ -611,46 +728,19 @@ def run_api_server(host, port):
     uvicorn.run(app, host=host, port=port)
 
 def main():
-    parser = argparse.ArgumentParser(description="Gradio WebUI for Browser Agent")
-    
-    # Check if running in AWS environment (ECS)
-    default_ip = "0.0.0.0" if (os.environ.get("AWS_EXECUTION_ENV") or 
-                               os.environ.get("ECS_CONTAINER_METADATA_URI")) else "127.0.0.1"
-    
-    parser.add_argument("--ip", type=str, default=default_ip, help="IP address to bind to")
-    parser.add_argument("--port", type=int, default=7788, help="Port to listen on")
-    parser.add_argument("--api-port", type=int, default=7789, help="Port for the API server")
-    parser.add_argument("--theme", type=str, default="Ocean", 
-                       choices=theme_map.keys(), help="Theme to use for the UI")
-    parser.add_argument("--api-only", action="store_true", 
-                       help="Run only the API server without the Gradio UI")
+    parser = argparse.ArgumentParser(description="Web UI")
+    parser.add_argument("--ip", type=str, default="localhost", help="IP address to serve on")
+    parser.add_argument("--port", type=int, default=7788, help="Port to serve Gradio UI on")
+    parser.add_argument("--api-port", type=int, default=7789, help="Port to serve API on")
+
     args = parser.parse_args()
 
-    # Always use 0.0.0.0 in production Docker containers for proper networking
-    if (os.environ.get("DOCKER_CONTAINER") or os.environ.get("AWS_EXECUTION_ENV") or 
-        os.environ.get("ECS_CONTAINER_METADATA_URI")):
-        args.ip = "0.0.0.0"
-        
-    if args.api_only:
-        print(f"Starting API server on {args.ip}:{args.port}")
-        run_api_server(args.ip, args.port)
-    else:
-        # Initialize WebUI manager for agent functionality
-        global webui_manager
-        webui_manager = WebuiManager()
-        
-        # Start API server in a separate thread with a different port
-        api_thread = threading.Thread(
-            target=run_api_server,
-            args=(args.ip, args.api_port),
-            daemon=True
-        )
-        api_thread.start()
-        print(f"API server started on {args.ip}:{args.api_port}")
-        
-        # Start Gradio UI
-    print(f"Starting webui on {args.ip}:{args.port}")
-    demo = create_ui(theme_name=args.theme)
+    # Start API server in a separate thread
+    api_thread = threading.Thread(target=run_api_server, args=(args.ip, args.api_port))
+    api_thread.daemon = True
+    api_thread.start()
+
+    demo = create_ui(theme_name="Ocean")
     demo.queue().launch(server_name=args.ip, server_port=args.port)
 
 if __name__ == '__main__':

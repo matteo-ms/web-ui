@@ -102,11 +102,17 @@ def _format_agent_output(model_output: AgentOutput) -> str:
     if model_output:
         try:
             # Directly use model_dump if actions and current_state are Pydantic models
-            action_dump = [
-                action.model_dump(exclude_none=True) for action in model_output.action
-            ]
-
-            state_dump = model_output.current_state.model_dump(exclude_none=True)
+            try:
+                action_dump = [
+                    action.model_dump(exclude_none=True) for action in model_output.action
+                ]
+                state_dump = model_output.current_state.model_dump(exclude_none=True)
+            except AttributeError:
+                # Fallback for non-pydantic models or objects
+                logger.warning("Using fallback serialization for model output")
+                action_dump = [str(action) for action in model_output.action]
+                state_dump = str(model_output.current_state)
+                
             model_output_dump = {
                 "current_state": state_dump,
                 "action": action_dump,

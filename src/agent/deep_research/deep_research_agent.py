@@ -5,7 +5,7 @@ import os
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict, Union
 
 from browser_use.browser.browser import BrowserConfig
 from browser_use.browser.context import BrowserContextWindowSize
@@ -28,6 +28,7 @@ from langchain_core.tools import StructuredTool, Tool
 
 # Langgraph imports
 from langgraph.graph import StateGraph
+from langgraph.graph.graph import CompiledGraph
 from pydantic import BaseModel, Field
 
 from src.agent.browser_use.browser_use_agent import BrowserUseAgent
@@ -317,7 +318,7 @@ class DeepResearchState(TypedDict):
     # messages: Sequence[BaseMessage] # History for ReAct-like steps within nodes
     llm: Any  # The LLM instance
     tools: List[Tool]
-    output_dir: Path
+    output_dir: str  # Changed from Path to str for consistency
     browser_config: Dict[str, Any]
     final_report: Optional[str]
     current_step_index: int  # To track progress through the plan
@@ -409,7 +410,7 @@ def _save_search_results_to_json(results: List[Dict[str, Any]], output_dir: str)
         logger.error(f"Failed to save search results to {search_file}: {e}")
 
 
-def _save_report_to_md(report: str, output_dir: Path):
+def _save_report_to_md(report: str, output_dir: str):  # Changed from Path to str
     """Saves the final report to a markdown file."""
     report_file = os.path.join(output_dir, REPORT_FILENAME)
     try:
@@ -437,7 +438,7 @@ async def planning_node(state: DeepResearchState) -> Dict[str, Any]:
         logger.info("Resuming with existing plan.")
         # Maybe add logic here to let LLM review and potentially adjust the plan
         # based on existing_results, but for now, we just use the loaded plan.
-        _save_plan_to_md(existing_plan, output_dir)  # Ensure it's saved initially
+        _save_plan_to_md(existing_plan, str(output_dir))  # Ensure it's saved initially
         return {"research_plan": existing_plan}  # Return the loaded plan
 
     logger.info(f"Generating new research plan for topic: {topic}")
@@ -495,7 +496,7 @@ async def planning_node(state: DeepResearchState) -> Dict[str, Any]:
             return {"error_message": "Failed to generate research plan structure."}
 
         logger.info(f"Generated research plan with {len(new_plan)} steps.")
-        _save_plan_to_md(new_plan, output_dir)
+        _save_plan_to_md(new_plan, str(output_dir))
 
         return {
             "research_plan": new_plan,
@@ -733,7 +734,7 @@ async def synthesis_node(state: DeepResearchState) -> Dict[str, Any]:
     if not search_results:
         logger.warning("No search results found to synthesize report.")
         report = f"# Research Report: {topic}\n\nNo information was gathered during the research process."
-        _save_report_to_md(report, output_dir)
+        _save_report_to_md(report, str(output_dir))
         return {"final_report": report}
 
     logger.info(
@@ -834,7 +835,7 @@ async def synthesis_node(state: DeepResearchState) -> Dict[str, Any]:
             final_report_md += report_references_section
 
         logger.info("Successfully synthesized the final report.")
-        _save_report_to_md(final_report_md, output_dir)
+        _save_report_to_md(final_report_md, str(output_dir))
         return {"final_report": final_report_md}
 
     except Exception as e:
@@ -930,24 +931,26 @@ class DeepResearchAgent:
                     self.mcp_client = await setup_mcp_client_and_tools(
                         self.mcp_server_config
                     )
-                mcp_tools = self.mcp_client.get_tools()
-                logger.info(f"Loaded {len(mcp_tools)} MCP tools.")
-                tools.extend(mcp_tools)
+                if self.mcp_client and hasattr(self.mcp_client, 'get_tools'):
+                    mcp_tools = self.mcp_client.get_tools()
+                    logger.info(f"Loaded {len(mcp_tools)} MCP tools.")
+                    tools.extend(mcp_tools)
+                else:
+                    logger.warning("MCP client setup failed or doesn't have get_tools method.")
             except Exception as e:
                 logger.error(f"Failed to set up MCP tools: {e}", exc_info=True)
         elif self.mcp_server_config:
             logger.warning(
                 "MCP server config provided, but setup function unavailable."
             )
-        tools_map = {tool.name: tool for tool in tools}
-        return tools_map.values()
+        return list(tools)  # Convert to list to match return type
 
     async def close_mcp_client(self):
         if self.mcp_client:
             await self.mcp_client.__aexit__(None, None, None)
             self.mcp_client = None
 
-    def _compile_graph(self) -> StateGraph:
+    def _compile_graph(self) -> CompiledGraph:  # Fixed return type
         """Compiles the Langgraph state machine."""
         workflow = StateGraph(DeepResearchState)
 
@@ -1024,7 +1027,7 @@ class DeepResearchAgent:
         agent_tools = await self._setup_tools(
             self.current_task_id, self.stop_event, max_parallel_browsers
         )
-        initial_state: DeepResearchState = {
+        initial_state: Dict[str, Any] = {  # Changed type annotation
             "task_id": self.current_task_id,
             "topic": topic,
             "research_plan": [],
@@ -1032,7 +1035,7 @@ class DeepResearchAgent:
             "messages": [],
             "llm": self.llm,
             "tools": agent_tools,
-            "output_dir": output_dir,
+            "output_dir": output_dir,  # Now str type matches state definition
             "browser_config": self.browser_config,
             "final_report": None,
             "current_step_index": 0,
@@ -1044,7 +1047,10 @@ class DeepResearchAgent:
         if task_id:
             logger.info(f"Attempting to resume task {task_id}...")
             loaded_state = _load_previous_state(task_id, output_dir)
-            initial_state.update(loaded_state)
+            # Manual update to avoid type issues
+            for key, value in loaded_state.items():
+                if key in initial_state:
+                    initial_state[key] = value
             if loaded_state.get("research_plan"):
                 logger.info(
                     f"Resuming with {len(loaded_state['research_plan'])} plan steps and {len(loaded_state.get('search_results', []))} existing results."
@@ -1058,13 +1064,13 @@ class DeepResearchAgent:
                 )
                 initial_state["current_step_index"] = 0
 
-        # --- Execute Graph using ainvoke ---
+        # --- Execute Graph using invoke ---
         final_state = None
         status = "unknown"
         message = None
         try:
             logger.info(f"Invoking graph execution for task {self.current_task_id}...")
-            self.runner = asyncio.create_task(self.graph.ainvoke(initial_state))
+            self.runner = asyncio.create_task(self.graph.ainvoke(initial_state))  # Use ainvoke for async
             final_state = await self.runner
             logger.info(f"Graph execution finished for task {self.current_task_id}.")
 
