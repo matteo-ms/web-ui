@@ -44,6 +44,7 @@ RUN apt-get update && apt-get install -y \
     fonts-dejavu-core \
     fonts-dejavu-extra \
     vim \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Install noVNC
@@ -95,14 +96,23 @@ ENV RESOLUTION_HEIGHT=1080
 ENV DOCKER_CONTAINER=true
 ENV AWS_EXECUTION_ENV=true
 
-# Add health check
+# Copy and set up comprehensive health check
+COPY health_check.sh /app/health_check.sh
+RUN chmod +x /app/health_check.sh
+
+# Add comprehensive health check with longer startup time for complex service dependencies
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
-  CMD nc -z localhost 7788 || exit 1
+  CMD /app/health_check.sh
 # Set up supervisor configuration
 RUN mkdir -p /var/log/supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
+# Copy and setup entrypoint script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Expose ports properly
 EXPOSE 7788 6080 5901 8000 9222-9300 7789
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# Use the entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]
