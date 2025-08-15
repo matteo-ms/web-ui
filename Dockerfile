@@ -30,6 +30,9 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     xdg-utils \
     fonts-liberation \
+    fonts-unifont \
+    fonts-dejavu-core \
+    fonts-freefont-ttf \
     dbus \
     xauth \
     x11vnc \
@@ -71,21 +74,21 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install playwright browsers and dependencies
-# Use updated playwright browser installation approach
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-browsers
-RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH
-
-# Install Chromium with dependencies for better compatibility
-RUN playwright install chromium --with-deps
+# Install Playwright browsers (system dependencies already installed above)
+RUN playwright install chromium
 
 # Copy the application code
 COPY . .
 
+# Test Playwright installation
+COPY test-playwright.py /tmp/test-playwright.py
+RUN python3 /tmp/test-playwright.py || echo "⚠️ Playwright test failed but continuing build"
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV BROWSER_USE_LOGGING_LEVEL=info
-ENV CHROME_PATH=/ms-browsers/chromium-*/chrome-linux/chrome
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV CHROME_PATH=""
 ENV ANONYMIZED_TELEMETRY=false
 ENV DISPLAY=:99
 ENV RESOLUTION=1920x1080x24
