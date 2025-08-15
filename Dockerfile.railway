@@ -42,15 +42,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers without system dependencies (already installed above)
-# Force reinstall to ensure version compatibility with browser-use
-RUN playwright install --force chromium
+RUN playwright install chromium
 
 # Copy application code
 COPY . .
-
-# Fix Playwright paths for browser-use compatibility
-COPY fix-playwright-paths.py /tmp/fix-playwright-paths.py
-RUN python3 /tmp/fix-playwright-paths.py || echo "⚠️ Playwright path fix failed but continuing build"
 
 # Create necessary directories
 RUN mkdir -p /var/log/supervisor /tmp/agent_history ./outputs/history ./outputs/recordings
