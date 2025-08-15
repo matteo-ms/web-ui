@@ -20,25 +20,22 @@ from src.utils import utils
 async def test_browser_use_agent():
     from browser_use.browser.browser import Browser, BrowserConfig
     from browser_use.browser.context import (
-        BrowserContextConfig,
-        BrowserContextWindowSize,
+        BrowserContextConfig
     )
     from browser_use.agent.service import Agent
 
     from src.browser.custom_browser import CustomBrowser
-    from src.browser.custom_context import CustomBrowserContextConfig
     from src.controller.custom_controller import CustomController
     from src.utils import llm_provider
+    from src.agent.browser_use.browser_use_agent import BrowserUseAgent
 
-    # llm = utils.get_llm_model(
-    #     provider="openai",
-    #     model_name="gpt-4o",
-    #     temperature=0.8,
-    #     base_url=os.getenv("OPENAI_ENDPOINT", ""),
-    #     api_key=os.getenv("OPENAI_API_KEY", ""),
-    # )
+    llm = llm_provider.get_llm_model(
+        provider="openai",
+        model_name="gpt-4o",
+        temperature=0.8,
+    )
 
-    # llm = utils.get_llm_model(
+    # llm = llm_provider.get_llm_model(
     #     provider="google",
     #     model_name="gemini-2.0-flash",
     #     temperature=0.6,
@@ -67,25 +64,25 @@ async def test_browser_use_agent():
 
     window_w, window_h = 1280, 1100
 
-    llm = llm_provider.get_llm_model(
-        provider="azure_openai",
-        model_name="gpt-4o",
-        temperature=0.5,
-        base_url=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
-        api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
-    )
+    # llm = llm_provider.get_llm_model(
+    #     provider="azure_openai",
+    #     model_name="gpt-4o",
+    #     temperature=0.5,
+    #     base_url=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
+    #     api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
+    # )
 
     mcp_server_config = {
         "mcpServers": {
-            "markitdown": {
-                "command": "docker",
-                "args": [
-                    "run",
-                    "--rm",
-                    "-i",
-                    "markitdown-mcp:latest"
-                ]
-            },
+            # "markitdown": {
+            #     "command": "docker",
+            #     "args": [
+            #         "run",
+            #         "--rm",
+            #         "-i",
+            #         "markitdown-mcp:latest"
+            #     ]
+            # },
             "desktop-commander": {
                 "command": "npx",
                 "args": [
@@ -97,8 +94,7 @@ async def test_browser_use_agent():
     }
     controller = CustomController()
     await controller.setup_mcp_client(mcp_server_config)
-    use_own_browser = False
-    disable_security = True
+    use_own_browser = True
     use_vision = True  # Set to False when using DeepSeek
 
     max_actions_per_step = 10
@@ -106,37 +102,39 @@ async def test_browser_use_agent():
     browser_context = None
 
     try:
-        extra_chromium_args = [f"--window-size={window_w},{window_h}"]
+        extra_browser_args = []
         if use_own_browser:
-            chrome_path = os.getenv("CHROME_PATH", None)
-            if chrome_path == "":
-                chrome_path = None
-            chrome_user_data = os.getenv("CHROME_USER_DATA", None)
-            if chrome_user_data:
-                extra_chromium_args += [f"--user-data-dir={chrome_user_data}"]
+            browser_binary_path = os.getenv("BROWSER_PATH", None)
+            if browser_binary_path == "":
+                browser_binary_path = None
+            browser_user_data = os.getenv("BROWSER_USER_DATA", None)
+            if browser_user_data:
+                extra_browser_args += [f"--user-data-dir={browser_user_data}"]
         else:
-            chrome_path = None
+            browser_binary_path = None
         browser = CustomBrowser(
             config=BrowserConfig(
                 headless=False,
-                disable_security=disable_security,
-                browser_binary_path=chrome_path,
-                extra_browser_args=extra_chromium_args,
+                browser_binary_path=browser_binary_path,
+                extra_browser_args=extra_browser_args,
+                new_context_config=BrowserContextConfig(
+                    window_width=window_w,
+                    window_height=window_h,
+                )
             )
         )
         browser_context = await browser.new_context(
-            config=CustomBrowserContextConfig(
-                trace_path="./tmp/traces",
-                save_recording_path="./tmp/record_videos",
+            config=BrowserContextConfig(
+                trace_path=None,
+                save_recording_path=None,
                 save_downloads_path="./tmp/downloads",
-                browser_window_size=BrowserContextWindowSize(
-                    width=window_w, height=window_h
-                ),
-                force_new_context=True
+                window_height=window_h,
+                window_width=window_w,
             )
         )
-        agent = Agent(
-            task="download pdf from https://arxiv.org/abs/2504.10458 and rename this pdf to 'GUI-r1-test.pdf'",
+        agent = BrowserUseAgent(
+            # task="download pdf from https://arxiv.org/pdf/2311.16498 and rename this pdf to 'mcp-test.pdf'",
+            task="give me nvidia stock price",
             llm=llm,
             browser=browser,
             browser_context=browser_context,
@@ -153,7 +151,6 @@ async def test_browser_use_agent():
         print("\nErrors:")
         pprint(history.errors(), indent=4)
 
-
     except Exception:
         import traceback
         traceback.print_exc()
@@ -167,24 +164,16 @@ async def test_browser_use_agent():
 
 
 async def test_browser_use_parallel():
-    from browser_use.browser.context import BrowserContextWindowSize
-    from browser_use.browser.browser import BrowserConfig
-    from patchright.async_api import async_playwright
-    from browser_use.browser.browser import Browser
-    from src.browser.custom_context import BrowserContextConfig
-    from src.controller.custom_controller import CustomController
-
     from browser_use.browser.browser import Browser, BrowserConfig
     from browser_use.browser.context import (
         BrowserContextConfig,
-        BrowserContextWindowSize,
     )
     from browser_use.agent.service import Agent
 
     from src.browser.custom_browser import CustomBrowser
-    from src.browser.custom_context import CustomBrowserContextConfig
     from src.controller.custom_controller import CustomController
     from src.utils import llm_provider
+    from src.agent.browser_use.browser_use_agent import BrowserUseAgent
 
     # llm = utils.get_llm_model(
     #     provider="openai",
@@ -233,15 +222,15 @@ async def test_browser_use_parallel():
 
     mcp_server_config = {
         "mcpServers": {
-            "markitdown": {
-                "command": "docker",
-                "args": [
-                    "run",
-                    "--rm",
-                    "-i",
-                    "markitdown-mcp:latest"
-                ]
-            },
+            # "markitdown": {
+            #     "command": "docker",
+            #     "args": [
+            #         "run",
+            #         "--rm",
+            #         "-i",
+            #         "markitdown-mcp:latest"
+            #     ]
+            # },
             "desktop-commander": {
                 "command": "npx",
                 "args": [
@@ -261,8 +250,7 @@ async def test_browser_use_parallel():
     }
     controller = CustomController()
     await controller.setup_mcp_client(mcp_server_config)
-    use_own_browser = False
-    disable_security = True
+    use_own_browser = True
     use_vision = True  # Set to False when using DeepSeek
 
     max_actions_per_step = 10
@@ -270,37 +258,39 @@ async def test_browser_use_parallel():
     browser_context = None
 
     try:
-        extra_chromium_args = [f"--window-size={window_w},{window_h}"]
+        extra_browser_args = []
         if use_own_browser:
-            chrome_path = os.getenv("CHROME_PATH", None)
-            if chrome_path == "":
-                chrome_path = None
-            chrome_user_data = os.getenv("CHROME_USER_DATA", None)
-            if chrome_user_data:
-                extra_chromium_args += [f"--user-data-dir={chrome_user_data}"]
+            browser_binary_path = os.getenv("BROWSER_PATH", None)
+            if browser_binary_path == "":
+                browser_binary_path = None
+            browser_user_data = os.getenv("BROWSER_USER_DATA", None)
+            if browser_user_data:
+                extra_browser_args += [f"--user-data-dir={browser_user_data}"]
         else:
-            chrome_path = None
+            browser_binary_path = None
         browser = CustomBrowser(
             config=BrowserConfig(
                 headless=False,
-                disable_security=disable_security,
-                browser_binary_path=chrome_path,
-                extra_browser_args=extra_chromium_args,
+                browser_binary_path=browser_binary_path,
+                extra_browser_args=extra_browser_args,
+                new_context_config=BrowserContextConfig(
+                    window_width=window_w,
+                    window_height=window_h,
+                )
             )
         )
         browser_context = await browser.new_context(
-            config=CustomBrowserContextConfig(
-                trace_path="./tmp/traces",
-                save_recording_path="./tmp/record_videos",
+            config=BrowserContextConfig(
+                trace_path=None,
+                save_recording_path=None,
                 save_downloads_path="./tmp/downloads",
-                browser_window_size=BrowserContextWindowSize(
-                    width=window_w, height=window_h
-                ),
+                window_height=window_h,
+                window_width=window_w,
                 force_new_context=True
             )
         )
         agents = [
-            Agent(task=task, llm=llm, browser=browser, controller=controller)
+            BrowserUseAgent(task=task, llm=llm, browser=browser, controller=controller)
             for task in [
                 'Search Google for weather in Tokyo',
                 # 'Check Reddit front page title',
@@ -332,6 +322,8 @@ async def test_browser_use_parallel():
             await browser_context.close()
         if browser:
             await browser.close()
+        if controller:
+            await controller.close_mcp_client()
 
 
 async def test_deep_research_agent():
@@ -362,8 +354,8 @@ async def test_deep_research_agent():
 
     browser_config = {"headless": False, "window_width": 1280, "window_height": 1100, "use_own_browser": False}
     agent = DeepResearchAgent(llm=llm, browser_config=browser_config, mcp_server_config=mcp_server_config)
-    research_topic = "Impact of Microplastics on Marine Ecosystems"
-    task_id_to_resume = "815460fb-337a-4850-8fa4-a5f2db301a89"  # Set this to resume a previous task ID
+    research_topic = "Give me investment advices of nvidia and tesla."
+    task_id_to_resume = ""  # Set this to resume a previous task ID
 
     print(f"Starting research on: {research_topic}")
 
@@ -403,6 +395,6 @@ async def test_deep_research_agent():
 
 
 if __name__ == "__main__":
-    # asyncio.run(test_browser_use_agent())
+    asyncio.run(test_browser_use_agent())
     # asyncio.run(test_browser_use_parallel())
-    asyncio.run(test_deep_research_agent())
+    # asyncio.run(test_deep_research_agent())

@@ -205,6 +205,18 @@ def get_llm_model(provider: str, **kwargs):
             base_url=base_url,
             api_key=api_key,
         )
+    elif provider == "grok":
+        if not kwargs.get("base_url", ""):
+            base_url = os.getenv("GROK_ENDPOINT", "https://api.x.ai/v1")
+        else:
+            base_url = kwargs.get("base_url")
+
+        return ChatOpenAI(
+            model=kwargs.get("model_name", "grok-3"),
+            temperature=kwargs.get("temperature", 0.0),
+            base_url=base_url,
+            api_key=api_key,
+        )
     elif provider == "deepseek":
         if not kwargs.get("base_url", ""):
             base_url = os.getenv("DEEPSEEK_ENDPOINT", "")
@@ -322,6 +334,22 @@ def get_llm_model(provider: str, **kwargs):
             base_url=base_url,
             model_name=kwargs.get("model_name", "Qwen/QwQ-32B"),
             temperature=kwargs.get("temperature", 0.0),
+        )
+    elif provider == "modelscope":
+        if not kwargs.get("api_key", ""):
+            api_key = os.getenv("MODELSCOPE_API_KEY", "")
+        else:
+            api_key = kwargs.get("api_key")
+        if not kwargs.get("base_url", ""):
+            base_url = os.getenv("MODELSCOPE_ENDPOINT", "")
+        else:
+            base_url = kwargs.get("base_url")
+        return ChatOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            model_name=kwargs.get("model_name", "Qwen/QwQ-32B"),
+            temperature=kwargs.get("temperature", 0.0),
+            extra_body = {"enable_thinking": False}
         )
     else:
         raise ValueError(f"Unsupported provider: {provider}")

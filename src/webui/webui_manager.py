@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional, Dict, List
 import uuid
 import asyncio
+import time
 
 from gradio.components import Component
 from browser_use.browser.browser import Browser
@@ -163,5 +164,8 @@ class WebuiManager:
                     update_components[comp] = comp.__class__(value=comp_val)
                 else:
                     update_components[comp] = comp.__class__(value=comp_val)
+                    if comp_id == "agent_settings.planner_llm_provider":
+                        yield update_components  # yield provider, let callback run
+                        time.sleep(0.1)  # wait for Gradio UI callback
 
         return update_components

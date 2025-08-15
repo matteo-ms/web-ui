@@ -14,20 +14,31 @@ async def test_mcp_client():
     from src.utils.mcp_client import setup_mcp_client_and_tools, create_tool_param_model
 
     test_server_config = {
-        "playwright": {
-            "command": "npx",
-            "args": [
-                "@playwright/mcp@latest",
-            ],
-            "transport": "stdio",
-        },
-        "filesystem": {
-            "command": "npx",
-            "args": [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                "/Users/warmshao/ai_workspace",
-            ]
+        "mcpServers": {
+            # "markitdown": {
+            #     "command": "docker",
+            #     "args": [
+            #         "run",
+            #         "--rm",
+            #         "-i",
+            #         "markitdown-mcp:latest"
+            #     ]
+            # },
+            "desktop-commander": {
+                "command": "npx",
+                "args": [
+                    "-y",
+                    "@wonderwhy-er/desktop-commander"
+                ]
+            },
+            # "filesystem": {
+            #     "command": "npx",
+            #     "args": [
+            #         "-y",
+            #         "@modelcontextprotocol/server-filesystem",
+            #         "/Users/xxx/ai_workspace",
+            #     ]
+            # },
         }
     }
 
@@ -48,15 +59,15 @@ async def test_controller_with_mcp():
 
     mcp_server_config = {
         "mcpServers": {
-            "markitdown": {
-                "command": "docker",
-                "args": [
-                    "run",
-                    "--rm",
-                    "-i",
-                    "markitdown-mcp:latest"
-                ]
-            },
+            # "markitdown": {
+            #     "command": "docker",
+            #     "args": [
+            #         "run",
+            #         "--rm",
+            #         "-i",
+            #         "markitdown-mcp:latest"
+            #     ]
+            # },
             "desktop-commander": {
                 "command": "npx",
                 "args": [

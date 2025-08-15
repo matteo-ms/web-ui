@@ -142,17 +142,17 @@ def test_ibm_model():
 
 
 def test_qwen_model():
-    config = LLMConfig(provider="alibaba", model_name="qwen3-30b-a3b")
+    config = LLMConfig(provider="alibaba", model_name="qwen-vl-max")
     test_llm(config, "How many 'r's are in the word 'strawberry'?")
 
 
 if __name__ == "__main__":
     # test_openai_model()
     # test_google_model()
-    # test_azure_openai_model()
+    test_azure_openai_model()
     # test_deepseek_model()
     # test_ollama_model()
-    test_deepseek_r1_model()
+    # test_deepseek_r1_model()
     # test_deepseek_r1_ollama_model()
     # test_mistral_model()
     # test_ibm_model()
