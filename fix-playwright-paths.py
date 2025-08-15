@@ -1,121 +1,82 @@
 #!/usr/bin/env python3
 """
 Fix Playwright browser paths for browser-use compatibility
-This script ensures that the correct Chromium executable is available
 """
 import os
-import sys
-import subprocess
-from pathlib import Path
 import glob
+import shutil
+from pathlib import Path
 
-def find_chromium_executable():
-    """Find the actual Chromium executable installed by Playwright"""
-    possible_paths = [
-        "/ms-playwright/chromium-*/chrome-linux/chrome",
-        "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
-        "/home/*/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+def fix_playwright_paths():
+    """Fix Playwright browser paths to match browser-use expectations"""
+    print("🔧 Fixing Playwright browser paths...")
+    
+    # Common Playwright installation paths
+    playwright_paths = [
+        "/root/.cache/ms-playwright",
+        "/ms-playwright",
+        os.path.expanduser("~/.cache/ms-playwright")
     ]
     
-    for pattern in possible_paths:
-        matches = glob.glob(pattern)
-        if matches:
-            # Return the first match (should be the most recent)
-            return matches[0]
+    found_browsers = []
+    for path in playwright_paths:
+        if os.path.exists(path):
+            print(f"✅ Found Playwright path: {path}")
+            # Find chromium installations
+            chromium_dirs = glob.glob(f"{path}/chromium-*")
+            for chromium_dir in chromium_dirs:
+                chrome_exe = os.path.join(chromium_dir, "chrome-linux", "chrome")
+                if os.path.exists(chrome_exe):
+                    found_browsers.append((chromium_dir, chrome_exe))
+                    print(f"✅ Found Chrome at: {chrome_exe}")
     
-    return None
-
-def create_symlinks(actual_path, target_path="/ms-playwright/chromium-1169/chrome-linux/chrome"):
-    """Create symlinks to make browser-use find the correct executable"""
-    try:
-        # Create target directory structure
-        target_dir = Path(target_path).parent
-        target_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Remove existing symlink if it exists
-        if Path(target_path).exists():
-            Path(target_path).unlink()
-        
-        # Create symlink
-        Path(target_path).symlink_to(actual_path)
-        print(f"✅ Created symlink: {target_path} -> {actual_path}")
-        
-        # Also create the directory structure that browser-use expects
-        browser_dir = Path(actual_path).parent.parent
-        target_browser_dir = Path("/ms-playwright/chromium-1169")
-        
-        if not target_browser_dir.exists():
-            target_browser_dir.symlink_to(browser_dir)
-            print(f"✅ Created browser directory symlink: {target_browser_dir} -> {browser_dir}")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Failed to create symlinks: {e}")
+    if not found_browsers:
+        print("❌ No Chrome installations found!")
         return False
-
-def test_playwright_installation():
-    """Test if Playwright can launch Chromium"""
-    try:
-        from playwright.sync_api import sync_playwright
-        
-        with sync_playwright() as p:
-            # Try default launch first
-            try:
-                browser = p.chromium.launch(headless=True)
-                print("✅ Playwright can launch Chromium with default settings")
-                browser.close()
-                return True
-            except Exception as e1:
-                print(f"⚠️ Default launch failed: {e1}")
-                
-                # Try with chrome channel as fallback
-                try:
-                    browser = p.chromium.launch(channel="chrome", headless=True)
-                    print("✅ Playwright can launch Chromium with chrome channel")
-                    browser.close()
-                    return True
-                except Exception as e2:
-                    print(f"❌ Chrome channel launch also failed: {e2}")
-                    return False
-                    
-    except ImportError:
-        print("❌ Playwright not installed")
-        return False
-
-def main():
-    print("🔧 Fixing Playwright browser paths for browser-use compatibility...")
     
-    # First, try to find the actual Chromium executable
-    actual_chrome = find_chromium_executable()
+    # Use the most recent installation
+    latest_browser = sorted(found_browsers, key=lambda x: os.path.basename(x[0]))[-1]
+    chromium_dir, chrome_exe = latest_browser
     
-    if actual_chrome:
-        print(f"📍 Found Chromium at: {actual_chrome}")
+    print(f"🎯 Using latest Chrome: {chrome_exe}")
+    
+    # Create expected paths for browser-use
+    expected_paths = [
+        "/ms-playwright/chromium-1169/chrome-linux/chrome",
+        "/ms-browsers/chromium-1169/chrome-linux/chrome"
+    ]
+    
+    for expected_path in expected_paths:
+        expected_dir = os.path.dirname(expected_path)
+        expected_parent = os.path.dirname(expected_dir)
         
-        # Make sure it's executable
-        os.chmod(actual_chrome, 0o755)
+        # Create directory structure
+        os.makedirs(expected_parent, exist_ok=True)
         
-        # Create symlinks for browser-use compatibility
-        if create_symlinks(actual_chrome):
-            print("✅ Symlinks created successfully")
+        # Create symlink to actual chrome installation
+        if os.path.exists(expected_path) or os.path.islink(expected_path):
+            os.unlink(expected_path)
+        
+        # Create symlink to the chrome-linux directory
+        actual_chrome_linux = os.path.dirname(chrome_exe)
+        if os.path.exists(expected_dir) or os.path.islink(expected_dir):
+            if os.path.islink(expected_dir):
+                os.unlink(expected_dir)
+            else:
+                shutil.rmtree(expected_dir)
+        
+        os.symlink(actual_chrome_linux, expected_dir)
+        print(f"🔗 Created symlink: {expected_dir} -> {actual_chrome_linux}")
+    
+    # Verify the fix
+    for expected_path in expected_paths:
+        if os.path.exists(expected_path):
+            print(f"✅ Verified: {expected_path}")
         else:
-            print("⚠️ Failed to create symlinks")
-    else:
-        print("❌ Could not find Chromium executable")
-        print("🔍 Available Playwright browsers:")
-        try:
-            result = subprocess.run(['playwright', 'list'], capture_output=True, text=True)
-            print(result.stdout)
-        except:
-            print("Could not list browsers")
+            print(f"❌ Failed to create: {expected_path}")
     
-    # Test the installation
-    print("\n🧪 Testing Playwright installation...")
-    if test_playwright_installation():
-        print("✅ Playwright installation test passed")
-        sys.exit(0)
-    else:
-        print("❌ Playwright installation test failed")
-        sys.exit(1)
+    return True
 
 if __name__ == "__main__":
-    main()
+    success = fix_playwright_paths()
+    exit(0 if success else 1)

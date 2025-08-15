@@ -85,6 +85,10 @@ COPY . .
 COPY fix-playwright-paths.py /tmp/fix-playwright-paths.py
 RUN python3 /tmp/fix-playwright-paths.py || echo "⚠️ Playwright path fix failed but continuing build"
 
+# Patch browser-use to use Chrome channel as fallback
+COPY patch-browser-channel.py /tmp/patch-browser-channel.py
+RUN python3 /tmp/patch-browser-channel.py || echo "⚠️ Browser channel patch failed but continuing build"
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV BROWSER_USE_LOGGING_LEVEL=info
