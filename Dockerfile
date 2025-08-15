@@ -75,20 +75,22 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers (system dependencies already installed above)
-RUN playwright install chromium
+# Force reinstall to ensure version compatibility with browser-use
+RUN playwright install --force chromium
 
 # Copy the application code
 COPY . .
 
-# Test Playwright installation
-COPY test-playwright.py /tmp/test-playwright.py
-RUN python3 /tmp/test-playwright.py || echo "⚠️ Playwright test failed but continuing build"
+# Fix Playwright paths for browser-use compatibility
+COPY fix-playwright-paths.py /tmp/fix-playwright-paths.py
+RUN python3 /tmp/fix-playwright-paths.py || echo "⚠️ Playwright path fix failed but continuing build"
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV BROWSER_USE_LOGGING_LEVEL=info
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV CHROME_PATH=""
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV ANONYMIZED_TELEMETRY=false
 ENV DISPLAY=:99
 ENV RESOLUTION=1920x1080x24
