@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies including browsers
+# Install system dependencies including browsers and VNC services
 RUN apt-get update && apt-get install -y \
     wget \
     netcat-traditional \
@@ -35,7 +35,15 @@ RUN apt-get update && apt-get install -y \
     x11vnc \
     fluxbox \
     supervisor \
+    nginx \
+    git \
+    python3-numpy \
     && rm -rf /var/lib/apt/lists/*
+
+# Install noVNC
+RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/novnc \
+    && git clone --depth 1 https://github.com/novnc/websockify.git /opt/novnc/utils/websockify \
+    && chmod +x /opt/novnc/utils/novnc_proxy
 
 # Install Python dependencies
 COPY requirements.txt .
@@ -47,8 +55,11 @@ RUN playwright install chromium
 # Copy application code
 COPY . .
 
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
 # Create necessary directories
-RUN mkdir -p /var/log/supervisor /tmp/agent_history ./outputs/history ./outputs/recordings
+RUN mkdir -p /var/log/supervisor /tmp/agent_history ./outputs/history ./outputs/recordings /var/log/nginx
 
 # Set environment variables for Railway
 ENV PYTHONUNBUFFERED=1
@@ -64,16 +75,16 @@ ENV CHROME_USER_DATA=""
 ENV CHROME_PATH=""
 ENV ANONYMIZED_TELEMETRY=false
 
-# Railway uses PORT environment variable
-ENV PORT=7788
+# Railway uses PORT environment variable - nginx proxy will use this
+ENV PORT=80
 
 # Copy Railway-specific entrypoint
 COPY entrypoint.railway.sh /app/entrypoint.railway.sh
 RUN chmod +x /app/entrypoint.railway.sh
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:${PORT:-7788}/health || exit 1
+# Health check - check nginx proxy instead of direct WebUI
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD curl -f http://localhost:${PORT:-80}/health || exit 1
 
 # Expose port (Railway will map this automatically)
 EXPOSE $PORT

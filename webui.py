@@ -632,6 +632,10 @@ async def process_agent_task(task, session_id):
 async def healthcheck():
     return {"status": "ok", "message": "API server is running"}
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "message": "API server is running"}
+
 @app.get("/task-result/{session_id}")
 async def task_result(session_id: str, request: Request, authorized: bool = Depends(verify_api_key)):
     """Get complete results of a finished browser automation task"""
