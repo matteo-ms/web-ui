@@ -7,8 +7,16 @@ echo "🚂 Starting Browser Use WebUI with multiple services on Railway..."
 
 # Create VNC password directory and file
 mkdir -p ~/.vnc
-echo "${VNC_PASSWORD:-vncpassword}" | vncpasswd -f > ~/.vnc/passwd
-chmod 600 ~/.vnc/passwd
+# Try vncpasswd first, fallback to manual creation
+if command -v vncpasswd >/dev/null 2>&1; then
+    echo "${VNC_PASSWORD:-vncpassword}" | vncpasswd -f > ~/.vnc/passwd
+    chmod 600 ~/.vnc/passwd
+else
+    echo "⚠️  vncpasswd not found, creating password file manually"
+    # Create a simple password file (less secure but functional)
+    echo "${VNC_PASSWORD:-vncpassword}" > ~/.vnc/passwd
+    chmod 600 ~/.vnc/passwd
+fi
 
 # Start Xvfb (virtual display)
 echo "Starting virtual display..."
@@ -20,7 +28,11 @@ sleep 3
 
 # Start VNC server
 echo "Starting VNC server on port 5901..."
-x11vnc -display :99 -forever -shared -rfbauth ~/.vnc/passwd -rfbport 5901 &
+if command -v x11vnc >/dev/null 2>&1; then
+    x11vnc -display :99 -forever -shared -rfbauth ~/.vnc/passwd -rfbport 5901 &
+else
+    echo "⚠️  x11vnc not found, skipping VNC server"
+fi
 
 # Start window manager
 echo "Starting window manager..."

@@ -33,6 +33,8 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     xvfb \
     x11vnc \
+    tigervnc-standalone-server \
+    tigervnc-common \
     fluxbox \
     supervisor \
     nginx \
